@@ -1,45 +1,45 @@
+import io
 import os
 import subprocess
 import tempfile
 from typing import Set
 
-from azure.storage.blob import BlobServiceClient
+import boto3
 
-_BLOB_CONN_STR = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
-_READ_CONTAINER_NAME = "music-links"
-_WRITE_CONTAINER_NAME = "music"
+_ACCESS_KEY = os.getenv("AWS_ACCESS_KEY")
+_SECRET_KEY = os.getenv("AWS_SECRET_KEY")
+_BUCKET_NAME = os.getenv("BUCKET_NAME")
 
-CLIENT = BlobServiceClient.from_connection_string(_BLOB_CONN_STR)
+_s3 = boto3.resource(
+    "s3", aws_access_key_id=_ACCESS_KEY, aws_secret_access_key=_SECRET_KEY
+)
+
+BUCKET = _s3.Bucket(_BUCKET_NAME)
 
 
 def get_links() -> Set[str]:
     links = set()
 
-    container_client = CLIENT.get_container_client(_READ_CONTAINER_NAME)
-    blob_list = container_client.list_blobs()
+    for item in BUCKET.objects.all():
 
-    for blob in blob_list:
-        blob_client = CLIENT.get_blob_client(
-            container=_READ_CONTAINER_NAME, blob=blob.name
-        )
+        if item and item.key.endswith("txt"):
 
-        raw_byte_str = blob_client.download_blob().readall()
+            with io.BytesIO() as out:
 
-        if raw_byte_str:
-            lines = "".join(chr(x) for x in raw_byte_str)
-            for line in lines.split("\n"):
-                links.add(line)
+                BUCKET.download_fileobj(item.key, out)
+                raw_byte_str = out.getvalue()
+
+                if raw_byte_str:
+                    lines = "".join(chr(x) for x in raw_byte_str)
+                    for line in lines.split("\n"):
+                        links.add(line.replace("\r", ""))
 
     return links
 
 
 def upload_file(file_name: str, file_path: str):
-    blob_client = CLIENT.get_blob_client(
-        container=_WRITE_CONTAINER_NAME, blob=file_name
-    )
-
     with open(file_path, "rb") as data:
-        blob_client.upload_blob(data, overwrite=True)
+        BUCKET.upload_fileobj(data, file_name)
 
 
 def download_mp3s(links: Set[str], output_dir_path: str):
@@ -70,7 +70,7 @@ def main():
 
         for mp3 in os.listdir(tmp_dir):
             mp3_path = os.path.join(tmp_dir, mp3)
-            upload_file(mp3, mp3_path)
+            upload_file("/".join(["mp3s", mp3]), mp3_path)
             print(f"uploaded mp3 {mp3}")
 
 
